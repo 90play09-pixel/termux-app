@@ -1,0 +1,124 @@
+name: Build Custom Termux with mark.via package name
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-custom-termux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package_variant: [ apt-android-7, apt-android-5 ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-app
+          path: termux-app
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Apply package name changes
+        run: |
+          cd termux-app
+          
+          # 1. Modify TermuxConstants.java
+          echo "Modifying TermuxConstants.java..."
+          sed -i 's/public static final String TERMUX_PACKAGE_NAME = "com.termux"/public static final String TERMUX_PACKAGE_NAME = "mark.via"/g' termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+          
+          # 2. Modify build.gradle
+          echo "Modifying app/build.gradle..."
+          sed -i 's/namespace "com.termux"/namespace "mark.via"/g' app/build.gradle
+          sed -i 's/manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.termux"/manifestPlaceholders.TERMUX_PACKAGE_NAME = "mark.via"/g' app/build.gradle
+          
+          # 3. Modify plugin package names
+          sed -i 's/public static final String TERMUX_API_PACKAGE_NAME = TERMUX_PACKAGE_NAME + ".api"/public static final String TERMUX_API_PACKAGE_NAME = "mark.via.api"/g' termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+          sed -i 's/public static final String TERMUX_BOOT_PACKAGE_NAME = TERMUX_PACKAGE_NAME + ".boot"/public static final String TERMUX_BOOT_PACKAGE_NAME = "mark.via.boot"/g' termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+          sed -i 's/public static final String TERMUX_FLOAT_PACKAGE_NAME = TERMUX_PACKAGE_NAME + ".window"/public static final String TERMUX_FLOAT_PACKAGE_NAME = "mark.via.window"/g' termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+          sed -i 's/public static final String TERMUX_STYLING_PACKAGE_NAME = TERMUX_PACKAGE_NAME + ".styling"/public static final String TERMUX_STYLING_PACKAGE_NAME = "mark.via.styling"/g' termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+          sed -i 's/public static final String TERMUX_TASKER_PACKAGE_NAME = TERMUX_PACKAGE_NAME + ".tasker"/public static final String TERMUX_TASKER_PACKAGE_NAME = "mark.via.tasker"/g' termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+          sed -i 's/public static final String TERMUX_WIDGET_PACKAGE_NAME = TERMUX_PACKAGE_NAME + ".widget"/public static final String TERMUX_WIDGET_PACKAGE_NAME = "mark.via.widget"/g' termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java
+          
+          echo "Package name modification completed!"
+
+      - name: Build APKs
+        env:
+          PACKAGE_VARIANT: ${{ matrix.package_variant }}
+        run: |
+          cd termux-app
+          
+          # Set environment variables
+          export TERMUX_PACKAGE_VARIANT="$PACKAGE_VARIANT"
+          export TERMUX_APP_VERSION_NAME="0.118.0+github"
+          export TERMUX_APK_VERSION_TAG="v0.118.0+github-$PACKAGE_VARIANT-debug-mark.via"
+          
+          echo "Building APKs for variant: $PACKAGE_VARIANT"
+          echo "Environment:"
+          echo "  TERMUX_PACKAGE_VARIANT=$TERMUX_PACKAGE_VARIANT"
+          echo "  TERMUX_APP_VERSION_NAME=$TERMUX_APP_VERSION_NAME"
+          echo "  TERMUX_APK_VERSION_TAG=$TERMUX_APK_VERSION_TAG"
+          
+          # Build with Gradle
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: termux-mark-via-${{ matrix.package_variant }}-apks
+          path: |
+            termux-app/app/build/outputs/apk/debug/*.apk
+            termux-app/app/build/outputs/apk/debug/*_sha256sums
+          retention-days: 7
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: termux-app/app/build/outputs/apk/debug/*.apk
+          tag_name: mark.via-${{ github.sha }}
+          name: Termux with mark.via package name
+          body: |
+            # Termux Custom Build - Package Name: mark.via
+            
+            This build changes Termux package name from `com.termux` to `mark.via`.
+            
+            ## Important Notes
+            
+            1. **Cannot coexist with official Termux**: Due to different package names, this version cannot be installed alongside official Termux.
+            2. **Need to recompile all packages**: Termux binaries have hardcoded path `/data/data/com.termux`, so all packages need to be recompiled for `mark.via`.
+            3. **Plugin apps**: All Termux plugin apps also need corresponding package name changes.
+            
+            ## Build Information
+            - Package name: `mark.via`
+            - Build variant: ${{ matrix.package_variant }}
+            - Commit: ${{ github.sha }}
+            - Build time: ${{ github.event.head_commit.timestamp }}
+            
+            ## Usage
+            1. Uninstall any existing Termux app
+            2. Install this APK
+            3. Need to recompile Termux packages for `mark.via`
+            
+            ## Recompile packages
+            Need to modify `scripts/properties.sh` in termux-packages repository:
+            ```bash
+            TERMUX_APP__PACKAGE_NAME="mark.via"
+            TERMUX_APP__DATA_DIR="/data/data/mark.via"
+            TERMUX_APP__NAMESPACE="mark.via"
+            TERMUX_REPO_APP__PACKAGE_NAME="mark.via"
+            ```
+          draft: false
+          prerelease: true
